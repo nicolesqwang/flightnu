@@ -1,31 +1,37 @@
-"""Standalone entrypoint for the Render background worker service.
-
-Runs the APScheduler ingestion job on a fixed interval (default: every 4
-hours, see INGESTION_INTERVAL_HOURS) and then idles. Deployed as a separate
-Render "Background Worker" service from the FastAPI web service.
-"""
-
 import logging
+import os
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from app.core.database import Base, engine
 from app.core.scheduler import run_ingestion_job, start_scheduler
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("flightnu.worker")
+logger = logging.getLogger("flight_alpha.worker")
 
 
-def main() -> None:
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'{"status":"ok"}')
+    def log_message(self, *args):
+        pass
+
+
+def main():
     Base.metadata.create_all(bind=engine)
-    logger.info("FlightNu worker starting up")
+    logger.info("Flight Alpha worker starting up")
 
-    # Run once immediately on boot so trackers don't sit idle for a full interval.
     run_ingestion_job()
-
     scheduler = start_scheduler()
+
+    port = int(os.environ.get("PORT", 8000))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    logger.info("Worker health server on port %d", port)
     try:
-        while True:
-            time.sleep(60)
+        server.serve_forever()
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
 
