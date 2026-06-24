@@ -39,7 +39,7 @@ services:
         sync: false
 
   # Background worker: runs the 4-hour price ingestion / analytics / alert cycle
-  - type: worker
+  - type: web
     name: flightnu-worker
     runtime: python
     plan: free
