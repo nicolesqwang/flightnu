@@ -11,7 +11,12 @@ export function formatPercent(value: number | null | undefined, digits = 0): str
 
 export function formatDate(value: string | null | undefined): string {
   if (!value) return "—";
-  return new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  // Date-only strings ("YYYY-MM-DD") are parsed by `Date` as UTC midnight, which
+  // shifts a day back once toLocaleDateString renders in a timezone behind UTC.
+  // Build the date from its components in local time instead.
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+  const localDate = new Date(year, month - 1, day);
+  return localDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 export function formatDateTime(value: string | null | undefined): string {

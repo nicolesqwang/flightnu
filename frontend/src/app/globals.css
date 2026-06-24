@@ -65,7 +65,7 @@ body {
 
 .cursor-halo {
   background: radial-gradient(
-    520px circle at var(--cursor-x) var(--cursor-y),
+    260px circle at var(--cursor-x) var(--cursor-y),
     rgba(106, 227, 255, 0.18),
     rgba(180, 109, 255, 0.12) 35%,
     transparent 68%
@@ -75,7 +75,7 @@ body {
 
 .cursor-core {
   background: radial-gradient(
-    150px circle at var(--cursor-x) var(--cursor-y),
+    75px circle at var(--cursor-x) var(--cursor-y),
     rgba(255, 255, 255, 0.28),
     rgba(106, 227, 255, 0.14) 45%,
     transparent 75%
