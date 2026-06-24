@@ -1,0 +1,257 @@
+@import "tailwindcss";
+
+:root {
+  --background: #050507;
+  --foreground: #eef0f6;
+  --surface: #0c0d13;
+  --surface-2: #11131c;
+  --border: #20222e;
+
+  --accent-green: #2cffb8;
+  --accent-red: #ff5d8f;
+  --accent-yellow: #ffc857;
+  --accent-blue: #6ae3ff;
+  --accent-purple: #b46dff;
+  --muted: #8a8fa3;
+
+  --cursor-x: 50%;
+  --cursor-y: 50%;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-accent-green: var(--accent-green);
+  --color-accent-red: var(--accent-red);
+  --color-accent-yellow: var(--accent-yellow);
+  --color-accent-blue: var(--accent-blue);
+  --color-accent-purple: var(--accent-purple);
+  --color-muted: var(--muted);
+  --font-sans: var(--font-display);
+  --font-mono: var(--font-mono);
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  position: relative;
+  background:
+    radial-gradient(900px circle at 12% -10%, rgba(106, 227, 255, 0.10), transparent 55%),
+    radial-gradient(800px circle at 88% 0%, rgba(180, 109, 255, 0.10), transparent 55%),
+    radial-gradient(1200px circle at 50% 110%, rgba(44, 255, 184, 0.06), transparent 60%),
+    var(--background) fixed;
+  color: var(--foreground);
+  font-family: var(--font-display), Arial, Helvetica, sans-serif;
+  letter-spacing: -0.01em;
+}
+
+/* ---------- cursor spotlight ---------- */
+
+.cursor-halo,
+.cursor-core {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  will-change: background;
+}
+
+.cursor-halo {
+  background: radial-gradient(
+    520px circle at var(--cursor-x) var(--cursor-y),
+    rgba(106, 227, 255, 0.18),
+    rgba(180, 109, 255, 0.12) 35%,
+    transparent 68%
+  );
+  mix-blend-mode: screen;
+}
+
+.cursor-core {
+  background: radial-gradient(
+    150px circle at var(--cursor-x) var(--cursor-y),
+    rgba(255, 255, 255, 0.28),
+    rgba(106, 227, 255, 0.14) 45%,
+    transparent 75%
+  );
+  mix-blend-mode: plus-lighter;
+}
+
+/* ---------- glass / neon cards ---------- */
+
+.glass-card {
+  position: relative;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012));
+  border: 1px solid var(--border);
+  backdrop-filter: blur(14px);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 16px 40px -22px rgba(0, 0, 0, 0.75);
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+}
+
+.glass-card:hover {
+  border-color: rgba(106, 227, 255, 0.35);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 0 0 1px rgba(106, 227, 255, 0.12),
+    0 0 36px -4px rgba(106, 227, 255, 0.25),
+    0 0 70px -10px rgba(180, 109, 255, 0.2),
+    0 20px 40px -22px rgba(0, 0, 0, 0.8);
+}
+
+.glow-green:hover {
+  border-color: rgba(44, 255, 184, 0.4) !important;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 0 0 1px rgba(44, 255, 184, 0.15),
+    0 0 40px -4px rgba(44, 255, 184, 0.35),
+    0 20px 40px -22px rgba(0, 0, 0, 0.8) !important;
+}
+
+.glow-red:hover {
+  border-color: rgba(255, 93, 143, 0.4) !important;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 0 0 1px rgba(255, 93, 143, 0.15),
+    0 0 40px -4px rgba(255, 93, 143, 0.35),
+    0 20px 40px -22px rgba(0, 0, 0, 0.8) !important;
+}
+
+.glow-yellow:hover {
+  border-color: rgba(255, 200, 87, 0.4) !important;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 0 0 1px rgba(255, 200, 87, 0.15),
+    0 0 40px -4px rgba(255, 200, 87, 0.35),
+    0 20px 40px -22px rgba(0, 0, 0, 0.8) !important;
+}
+
+.glow-blue:hover {
+  border-color: rgba(106, 227, 255, 0.4) !important;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 0 0 1px rgba(106, 227, 255, 0.15),
+    0 0 40px -4px rgba(106, 227, 255, 0.35),
+    0 20px 40px -22px rgba(0, 0, 0, 0.8) !important;
+}
+
+.glow-purple:hover {
+  border-color: rgba(180, 109, 255, 0.4) !important;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 0 0 1px rgba(180, 109, 255, 0.15),
+    0 0 40px -4px rgba(180, 109, 255, 0.35),
+    0 20px 40px -22px rgba(0, 0, 0, 0.8) !important;
+}
+
+.neon-text-green {
+  text-shadow: 0 0 16px rgba(44, 255, 184, 0.55), 0 0 40px rgba(44, 255, 184, 0.2);
+}
+
+.neon-text-red {
+  text-shadow: 0 0 16px rgba(255, 93, 143, 0.55), 0 0 40px rgba(255, 93, 143, 0.2);
+}
+
+.neon-text-blue {
+  text-shadow: 0 0 16px rgba(106, 227, 255, 0.5), 0 0 40px rgba(106, 227, 255, 0.18);
+}
+
+.neon-dot {
+  box-shadow: 0 0 8px currentColor, 0 0 18px currentColor;
+}
+
+/* ---------- skeleton ---------- */
+
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 37%, var(--surface) 63%);
+  background-size: 400px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.35s ease-out both;
+}
+
+@keyframes pulse-glow {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2.2s ease-in-out infinite;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 8px;
+}
+
+/* ---------- inputs ---------- */
+
+.input {
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0.55rem 0.85rem;
+  font-size: 0.875rem;
+  font-family: var(--font-mono);
+  color: var(--foreground);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.input:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 1px rgba(106, 227, 255, 0.3), 0 0 24px -4px rgba(106, 227, 255, 0.4);
+}
+
+.input::placeholder {
+  color: var(--muted);
+}
+
+/* numerals throughout render in the retro-techy mono face */
+.font-numeric {
+  font-family: var(--font-mono);
+}
