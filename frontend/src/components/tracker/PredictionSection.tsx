@@ -3,12 +3,23 @@ import { formatCurrency, formatPercent } from "@/lib/format";
 import type { Prediction } from "@/lib/types";
 
 export function PredictionSection({ prediction }: { prediction: Prediction }) {
+  if (prediction.has_forecast === false) {
+    return (
+      <Card className="glow-yellow">
+        <h3 className="mb-2 text-sm font-bold uppercase tracking-wider text-foreground">Prediction</h3>
+        <p className="text-sm text-muted">
+          Collecting data: {prediction.observation_count ?? 0} of 6 readings. Forecasts, probabilities and the 95%
+          prediction interval appear once there are 6 real prices spanning at least 12 hours.
+        </p>
+      </Card>
+    );
+  }
   return (
     <Card className="glow-yellow">
       <h3 className="mb-4 text-sm font-bold uppercase tracking-wider text-foreground">Prediction</h3>
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Stat label="Prob. Increase (24h)" value={formatPercent(prediction.prob_increase_24h * 100)} />
-        <Stat label="Prob. Increase (48h)" value={formatPercent(prediction.prob_increase_48h * 100)} />
+        <Stat label="Chance Higher in 24h" value={formatPercent(prediction.prob_increase_24h * 100)} />
+        <Stat label="Chance Higher in 48h" value={formatPercent(prediction.prob_increase_48h * 100)} />
         <Stat
           label="Expected Increase"
           value={formatCurrency(prediction.expected_increase, { showSign: true })}
@@ -46,7 +57,7 @@ export function PredictionSection({ prediction }: { prediction: Prediction }) {
         className="mt-4 rounded-xl border border-border bg-surface-2 p-4"
         style={{ boxShadow: "0 0 24px -10px rgba(255,200,87,0.4)" }}
       >
-        <p className="text-xs uppercase tracking-wider text-muted">95% Confidence Interval (48h forecast)</p>
+        <p className="text-xs uppercase tracking-wider text-muted">95% Prediction Interval (price in 48h)</p>
         <p className="font-numeric mt-1 text-lg font-bold text-foreground">
           {formatCurrency(prediction.confidence_interval_low)} – {formatCurrency(prediction.confidence_interval_high)}
         </p>

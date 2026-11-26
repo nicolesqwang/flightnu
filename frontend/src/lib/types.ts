@@ -12,6 +12,8 @@ export interface Tracker {
   alerts_enabled: boolean;
   active: boolean;
   created_at: string;
+  last_checked_at: string | null;
+  last_error: string | null;
 }
 
 export interface PriceObservation {
@@ -19,6 +21,10 @@ export interface PriceObservation {
   price: number;
   airline: string;
   timestamp: string;
+  source: string | null;
+  flight_number: string | null;
+  transfers: number | null;
+  booking_link: string | null;
 }
 
 export interface Prediction {
@@ -46,6 +52,10 @@ export interface Prediction {
   most_expensive_day_of_week: string | null;
   cheapest_hour_of_day: number | null;
   most_expensive_hour_of_day: number | null;
+  observation_count: number | null;
+  percentile: number | null;
+  days_to_departure: number | null;
+  has_forecast: boolean | null;
   generated_at: string;
 }
 
@@ -57,6 +67,7 @@ export interface TrackerCard {
   confidence_score: number | null;
   recommendation: Recommendation | null;
   observation_count: number;
+  data_source: string | null;
 }
 
 export interface TrackerDetail {
@@ -64,6 +75,7 @@ export interface TrackerDetail {
   observations: PriceObservation[];
   latest_prediction: Prediction | null;
   prediction_history: Prediction[];
+  total_observations: number;
 }
 
 export interface DashboardSummary {
@@ -72,6 +84,23 @@ export interface DashboardSummary {
   average_savings_opportunity: number;
   average_prediction_confidence: number;
   tracker_cards: TrackerCard[];
+}
+
+export interface ServerStatus {
+  price_provider: string;
+  provider_configured: boolean;
+  serpapi_configured: boolean;
+  admin_key_required: boolean;
+  max_active_trackers: number;
+  active_trackers: number;
+  last_ingest_at: string | null;
+}
+
+export interface Airport {
+  code: string;
+  name: string;
+  city: string;
+  country: string;
 }
 
 export interface TrackerCreatePayload {

@@ -8,17 +8,20 @@ import { CreateTrackerModal } from "@/components/CreateTrackerModal";
 import { TrackerCardSkeleton } from "@/components/ui/Skeleton";
 import { Button } from "@/components/ui/Button";
 import { api, ApiError } from "@/lib/api";
-import type { DashboardSummary } from "@/lib/types";
+import { formatRelative } from "@/lib/format";
+import type { DashboardSummary, ServerStatus } from "@/lib/types";
 
 export default function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [status, setStatus] = useState<ServerStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
 
   const loadSummary = useCallback(async () => {
     try {
-      const data = await api.getDashboardSummary();
+      const [data, st] = await Promise.all([api.getDashboardSummary(), api.getStatus()]);
       setSummary(data);
+      setStatus(st);
       setError(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not reach the FlightNu API.");
@@ -28,9 +31,12 @@ export default function DashboardPage() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional fetch-on-mount + poll
     loadSummary();
-    const interval = setInterval(loadSummary, 30_000);
+    // Poll faster while the server is waking from sleep, then every 30s.
+    const interval = setInterval(loadSummary, summary ? 30_000 : 8_000);
     return () => clearInterval(interval);
-  }, [loadSummary]);
+  }, [loadSummary, summary]);
+
+  const atCapacity = status ? status.active_trackers >= status.max_active_trackers : false;
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -39,14 +45,32 @@ export default function DashboardPage() {
         <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-foreground">Dashboard</h1>
-            <p className="mt-1 text-sm text-muted">Real-time flight price intelligence across all your trackers.</p>
+            <p className="mt-1 text-sm text-muted">
+              Real airfares tracked over time, with statistical buy/wait signals.
+              {status?.last_ingest_at && <> Last price check {formatRelative(status.last_ingest_at)}.</>}
+            </p>
           </div>
-          <Button onClick={() => setModalOpen(true)}>+ New Tracker</Button>
+          <Button onClick={() => setModalOpen(true)} disabled={atCapacity} title={atCapacity ? "Tracker limit reached" : undefined}>
+            + New Tracker
+          </Button>
         </div>
 
         {error && (
+          <div className="mb-6 rounded-xl border border-accent-yellow/30 bg-accent-yellow/10 px-4 py-3 text-sm text-accent-yellow">
+            {error} {!summary && "Retrying automatically…"}
+          </div>
+        )}
+
+        {status && !status.provider_configured && (
           <div className="mb-6 rounded-xl border border-accent-red/30 bg-accent-red/10 px-4 py-3 text-sm text-accent-red">
-            {error}
+            No flight-price API key is configured on the server, so no new prices can be fetched. Set
+            TRAVELPAYOUTS_TOKEN on the API service.
+          </div>
+        )}
+
+        {status?.price_provider === "simulator" && (
+          <div className="mb-6 rounded-xl border border-accent-yellow/30 bg-accent-yellow/10 px-4 py-3 text-sm text-accent-yellow">
+            Demo mode: prices on this server are simulated, not real fares.
           </div>
         )}
 
@@ -84,7 +108,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
       <p className="text-3xl">✈</p>
       <p className="mt-4 text-base font-medium text-foreground">No trackers yet</p>
       <p className="mt-1 max-w-sm text-sm text-muted">
-        Create your first flight tracker to start collecting prices and getting buy/wait recommendations.
+        Create a tracker to start collecting real fares and getting buy/wait recommendations.
       </p>
       <Button className="mt-5" onClick={onCreate}>
         + New Tracker
