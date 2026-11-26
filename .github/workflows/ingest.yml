@@ -1,0 +1,49 @@
+name: Fetch flight prices
+
+# Free replacement for an always-on worker. Runs hourly; the API only fetches
+# trackers whose own frequency (hourly / 4h / daily) says they're due.
+# Needs two repository secrets (Settings -> Secrets and variables -> Actions):
+#   FLIGHTNU_API_URL  e.g. https://flightnu-api.onrender.com
+#   CRON_SECRET       same value as the API's CRON_SECRET env var
+# Note: GitHub pauses scheduled workflows after 60 days with no repo activity;
+# re-enable it from the Actions tab if that happens.
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Fetch every active tracker now, even if not due"
+        type: boolean
+        default: false
+
+concurrency:
+  group: flightnu-ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Wake API (free Render services sleep after 15 idle minutes)
+        env:
+          API_URL: ${{ secrets.FLIGHTNU_API_URL }}
+        run: |
+          for i in $(seq 1 12); do
+            if curl -fsS --max-time 20 "$API_URL/api/health" >/dev/null; then echo "API awake"; exit 0; fi
+            echo "Waiting for API to wake ($i/12)..."; sleep 10
+          done
+          echo "API did not wake up"; exit 1
+
+      - name: Trigger ingestion
+        env:
+          API_URL: ${{ secrets.FLIGHTNU_API_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          FORCE: ${{ github.event.inputs.force || 'false' }}
+        run: |
+          curl -fsS --max-time 300 -X POST \
+            -H "X-Cron-Secret: $CRON_SECRET" \
+            "$API_URL/api/internal/ingest?force=$FORCE" | tee result.json
+          echo
+          python3 -c "import json; r=json.load(open('result.json')); print(f\"checked={r['checked']} fetched={r['fetched']} errors={len(r['errors'])}\"); [print('  ', e) for e in r['errors']]"

@@ -1,55 +1,21 @@
-"""Seeds sample trackers (SFO->JFK, SMF->SEA, LAX->HNL) with historical
-observations and predictions so the dashboard has data to show immediately."""
+"""Creates demo trackers (SFO->JFK, LAX->HNL, JFK->LAX) on an empty database
+and fetches their first real prices. The API also does this automatically
+on startup when AUTO_SEED=true."""
 
-import random
-from datetime import date, datetime, timedelta
+import logging
 
-from app.core.database import Base, SessionLocal, engine
-from app.core.deps import get_or_create_default_user
-from app.models.models import PriceObservation, Tracker
-from app.services.ingestion import process_tracker
-from app.services.simulator import simulate_price
+from app.core.database import SessionLocal, init_db
+from app.services.seed import seed_demo_trackers
 
-SAMPLE_ROUTES = [
-    ("SFO", "JFK", 45),
-    ("SMF", "SEA", 20),
-    ("LAX", "HNL", 75),
-]
+logging.basicConfig(level=logging.INFO)
 
 
 def main():
-    Base.metadata.create_all(bind=engine)
+    init_db()
     db = SessionLocal()
     try:
-        user = get_or_create_default_user(db)
-        if db.query(Tracker).filter(Tracker.user_id == user.id).count() > 0:
-            print("Trackers already exist, skipping seed.")
-            return
-
-        now = datetime.utcnow()
-        for origin, destination, days_until_departure in SAMPLE_ROUTES:
-            departure = date.today() + timedelta(days=days_until_departure)
-            tracker = Tracker(
-                user_id=user.id,
-                origin_airport=origin,
-                destination_airport=destination,
-                departure_date=departure,
-                alerts_enabled=True,
-            )
-            db.add(tracker)
-            db.commit()
-            db.refresh(tracker)
-
-            rng = random.Random(tracker.id)
-            for i in range(120, 0, -1):
-                ts = now - timedelta(hours=i * 4)
-                price, airline = simulate_price(origin, destination, departure, now=ts, rng=rng)
-                db.add(PriceObservation(tracker_id=tracker.id, price=price, airline=airline, timestamp=ts))
-            db.commit()
-            db.refresh(tracker)
-
-            process_tracker(db, tracker)
-            print(f"Seeded {origin} -> {destination} with {len(tracker.observations)} observations")
+        created = seed_demo_trackers(db)
+        print(f"Created {created} demo trackers." if created else "Trackers already exist, skipping seed.")
     finally:
         db.close()
 

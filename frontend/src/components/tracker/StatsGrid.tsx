@@ -4,28 +4,33 @@ import { formatCurrency, formatPercent } from "@/lib/format";
 import type { Prediction } from "@/lib/types";
 
 export function StatsGrid({ prediction }: { prediction: Prediction }) {
+  const cheaperThan = prediction.percentile === null ? null : 100 - prediction.percentile;
   const items = [
     { label: "Current Price", value: formatCurrency(prediction.current_price), glow: "glow-blue" },
-    { label: "Historical Average", value: formatCurrency(prediction.historical_average), glow: "glow-purple" },
+    { label: "Average Seen", value: formatCurrency(prediction.historical_average), glow: "glow-purple" },
     {
-      label: "Historical Low",
+      label: "Lowest Seen",
       value: formatCurrency(prediction.historical_low),
       accent: "text-accent-green neon-text-green",
       glow: "glow-green",
     },
     {
-      label: "Historical High",
+      label: "Highest Seen",
       value: formatCurrency(prediction.historical_high),
       accent: "text-accent-red neon-text-red",
       glow: "glow-red",
     },
     {
-      label: "Potential Savings",
-      value: formatCurrency(Math.max(0, prediction.historical_average - prediction.current_price)),
+      label: "Cheaper Than",
+      value: cheaperThan === null ? "—" : `${cheaperThan.toFixed(0)}% seen`,
       accent: "text-accent-green neon-text-green",
       glow: "glow-green",
     },
-    { label: "Prediction Confidence", value: formatPercent(prediction.confidence_score), glow: "glow-yellow" },
+    {
+      label: "Forecast Confidence",
+      value: prediction.has_forecast === false ? "Collecting" : formatPercent(prediction.confidence_score),
+      glow: "glow-yellow",
+    },
   ];
 
   return (

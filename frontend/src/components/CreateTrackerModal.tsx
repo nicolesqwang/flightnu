@@ -1,16 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { api, ApiError } from "@/lib/api";
-import type { TrackingFrequency } from "@/lib/types";
+import type { Airport, TrackingFrequency } from "@/lib/types";
 
 const FREQUENCIES: { value: TrackingFrequency; label: string }[] = [
   { value: "HOURLY", label: "Every hour" },
   { value: "EVERY_4_HOURS", label: "Every 4 hours" },
   { value: "DAILY", label: "Once a day" },
 ];
+
+function localISODate(offsetDays = 0): string {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 
 export function CreateTrackerModal({
   open,
@@ -44,30 +51,45 @@ export function CreateTrackerModal({
     setError(null);
   }
 
+  function close() {
+    reset();
+    onClose();
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
-    if (origin.trim().length !== 3 || destination.trim().length !== 3) {
+    const o = origin.trim().toUpperCase();
+    const d = destination.trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(o) || !/^[A-Z]{3}$/.test(d)) {
       setError("Airport codes must be exactly 3 letters (e.g. SFO).");
+      return;
+    }
+    if (o === d) {
+      setError("Origin and destination must be different.");
       return;
     }
     if (!departureDate) {
       setError("Departure date is required.");
       return;
     }
+    if (returnDate && returnDate < departureDate) {
+      setError("Return date must be on or after the departure date.");
+      return;
+    }
 
     setSubmitting(true);
     try {
       await api.createTracker({
-        origin_airport: origin.trim().toUpperCase(),
-        destination_airport: destination.trim().toUpperCase(),
+        origin_airport: o,
+        destination_airport: d,
         departure_date: departureDate,
         return_date: returnDate || null,
         tracking_frequency: frequency,
         alerts_enabled: alertsEnabled,
-        discord_webhook_url: discordWebhook || null,
-        alert_email: email || null,
+        discord_webhook_url: alertsEnabled && discordWebhook ? discordWebhook : null,
+        alert_email: alertsEnabled && email ? email : null,
       });
       reset();
       onCreated();
@@ -80,35 +102,14 @@ export function CreateTrackerModal({
   }
 
   return (
-    <Modal
-      open={open}
-      onClose={() => {
-        reset();
-        onClose();
-      }}
-      title="New Flight Tracker"
-    >
+    <Modal open={open} onClose={close} title="New Flight Tracker">
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <Field label="Origin Airport">
-            <input
-              value={origin}
-              onChange={(e) => setOrigin(e.target.value.toUpperCase())}
-              maxLength={3}
-              placeholder="SFO"
-              className="input"
-              required
-            />
+            <AirportInput value={origin} onChange={setOrigin} placeholder="SFO" />
           </Field>
           <Field label="Destination Airport">
-            <input
-              value={destination}
-              onChange={(e) => setDestination(e.target.value.toUpperCase())}
-              maxLength={3}
-              placeholder="JFK"
-              className="input"
-              required
-            />
+            <AirportInput value={destination} onChange={setDestination} placeholder="JFK" />
           </Field>
         </div>
 
@@ -117,6 +118,8 @@ export function CreateTrackerModal({
             <input
               type="date"
               value={departureDate}
+              min={localISODate()}
+              max={localISODate(330)}
               onChange={(e) => setDepartureDate(e.target.value)}
               className="input"
               required
@@ -126,13 +129,15 @@ export function CreateTrackerModal({
             <input
               type="date"
               value={returnDate}
+              min={departureDate || localISODate()}
+              max={localISODate(330)}
               onChange={(e) => setReturnDate(e.target.value)}
               className="input"
             />
           </Field>
         </div>
 
-        <Field label="Tracking Frequency">
+        <Field label="Check Price">
           <select
             value={frequency}
             onChange={(e) => setFrequency(e.target.value as TrackingFrequency)}
@@ -178,18 +183,72 @@ export function CreateTrackerModal({
           </div>
         )}
 
+        <p className="text-xs text-muted">
+          The first real price is fetched right away. Forecasts start after 6 readings spanning 12+ hours.
+        </p>
+
         {error && <p className="text-sm text-accent-red">{error}</p>}
 
         <div className="flex justify-end gap-3 pt-2">
-          <Button type="button" variant="ghost" onClick={onClose}>
+          <Button type="button" variant="ghost" onClick={close}>
             Cancel
           </Button>
           <Button type="submit" disabled={submitting}>
-            {submitting ? "Creating…" : "Create Tracker"}
+            {submitting ? "Fetching first price…" : "Create Tracker"}
           </Button>
         </div>
       </form>
     </Modal>
+  );
+}
+
+function AirportInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  const listId = useId();
+  const [options, setOptions] = useState<Airport[]>([]);
+
+  useEffect(() => {
+    const q = value.trim();
+    if (q.length < 2) return;
+    const timer = setTimeout(() => {
+      api
+        .searchAirports(q)
+        .then(setOptions)
+        .catch(() => setOptions([]));
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [value]);
+
+  return (
+    <>
+      <input
+        value={value}
+        onChange={(e) => {
+          // Picking a suggestion yields "SFO — San Francisco…"; keep the code.
+          const v = e.target.value.toUpperCase();
+          onChange(/^[A-Z]{3} — /.test(v) ? v.slice(0, 3) : v);
+        }}
+        list={listId}
+        placeholder={placeholder}
+        className="input"
+        autoComplete="off"
+        required
+      />
+      <datalist id={listId}>
+        {options.map((a) => (
+          <option key={a.code} value={`${a.code} — ${a.city || a.name}`}>
+            {a.name}, {a.country}
+          </option>
+        ))}
+      </datalist>
+    </>
   );
 }
 

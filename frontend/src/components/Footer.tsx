@@ -14,7 +14,9 @@ export function Footer() {
           </span>
         </div>
 
-        <p>&copy; {new Date().getFullYear()} FlightNu. All rights reserved.</p>
+        <p className="text-center">
+          Fares from Aviasales (Travelpayouts) and Google Flights (SerpApi). &copy; {new Date().getFullYear()} FlightNu.
+        </p>
 
         <a
           href="https://nicoleswang.com"

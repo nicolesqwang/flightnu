@@ -25,13 +25,13 @@ export function SummaryCards({ summary }: { summary: DashboardSummary | null }) 
         <CardValue>{summary.total_observations.toLocaleString()}</CardValue>
       </Card>
       <Card className="glow-green animate-fade-in-up">
-        <CardLabel>Average Savings Opportunity</CardLabel>
+        <CardLabel>Avg Below Average</CardLabel>
         <CardValue className="text-accent-green neon-text-green">
           {formatCurrency(summary.average_savings_opportunity)}
         </CardValue>
       </Card>
       <Card className="glow-yellow animate-fade-in-up">
-        <CardLabel>Average Prediction Confidence</CardLabel>
+        <CardLabel>Avg Forecast Confidence</CardLabel>
         <CardValue>{formatPercent(summary.average_prediction_confidence)}</CardValue>
       </Card>
     </div>

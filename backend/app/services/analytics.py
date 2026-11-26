@@ -1,18 +1,67 @@
-"""Statistical analytics engine: moving averages, anomaly detection,
-linear regression forecasting, and buy/wait/monitor recommendations."""
+"""Statistical analytics engine for one tracker's price history.
+
+What each number means (shown to users, so it must be honest):
+
+* historical_* / std_dev / z_score: descriptive stats over every observation.
+* percentile: % of observed prices that were cheaper than the current price
+  (0 = cheapest ever seen, 100 = most expensive).
+* Forecasts: ordinary least-squares trend over the recent window (last 14
+  days), extrapolated 24h / 48h. The 95% interval is a proper *prediction*
+  interval (residual standard error, t-distribution, distance from the mean
+  of x), not just +/- 2 standard deviations.
+* prob_increase_Nh: P(price in N hours > current price) under that model.
+* confidence_score: how tight the 48h prediction interval is relative to the
+  price, scaled down while there is little data. Wide interval -> low score.
+* No forecast is made until there are MIN_FORECAST_OBS observations spanning
+  at least MIN_FORECAST_SPAN_HOURS; until then the tracker is "collecting data".
+"""
 
 from __future__ import annotations
 
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from typing import Protocol, Sequence
 
 import numpy as np
 
-from app.models.models import PriceObservation, Recommendation
+from app.models.models import Recommendation
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+MIN_FORECAST_OBS = 6
+MIN_FORECAST_SPAN_HOURS = 12
+REGRESSION_WINDOW_DAYS = 14
+FULL_CONFIDENCE_OBS = 24
+SEASONALITY_MIN_DAYS = 14
+SEASONALITY_MIN_OBS = 28
+
+# Recommendation thresholds (documented in the README and shown in explanations).
+BUY_PERCENTILE = 25.0
+BUY_Z = -1.0
+BUY_PROB_UP = 0.55
+WAIT_PROB_UP = 0.40
+WAIT_MIN_DAYS = 14
+FINAL_WEEK_DAYS = 7
+
+# Two-sided 95% t critical values by degrees of freedom.
+_T95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262,
+        10: 2.228, 12: 2.179, 15: 2.131, 20: 2.086, 25: 2.060, 30: 2.042, 40: 2.021, 60: 2.000, 120: 1.980}
+
+
+def t_critical(df: int) -> float:
+    if df <= 0:
+        return float("inf")
+    for k in sorted(_T95):
+        if df <= k:
+            return _T95[k]
+    return 1.96
+
+
+class Observation(Protocol):
+    price: float
+    timestamp: datetime
 
 
 @dataclass
@@ -23,6 +72,7 @@ class AnalyticsResult:
     historical_high: float
     std_dev: float
     z_score: float
+    percentile: float
     sma: float
     ewma: float
     predicted_price_24h: float
@@ -36,6 +86,9 @@ class AnalyticsResult:
     confidence_score: float
     recommendation: Recommendation
     explanation: str
+    observation_count: int
+    days_to_departure: int
+    has_forecast: bool
     cheapest_day_of_week: str | None = None
     most_expensive_day_of_week: str | None = None
     cheapest_hour_of_day: int | None = None
@@ -45,13 +98,11 @@ class AnalyticsResult:
 
 
 def simple_moving_average(prices: np.ndarray, window: int = 5) -> np.ndarray:
-    if len(prices) == 0:
-        return np.array([])
-    window = max(1, min(window, len(prices)))
-    cumsum = np.cumsum(np.insert(prices, 0, 0))
-    sma = (cumsum[window:] - cumsum[:-window]) / window
-    pad = np.full(window - 1, sma[0] if len(sma) else prices[0])
-    return np.concatenate([pad, sma]) if len(sma) else prices.copy()
+    """Trailing mean; early points average whatever history exists."""
+    out = np.empty(len(prices), dtype=float)
+    for i in range(len(prices)):
+        out[i] = prices[max(0, i - window + 1): i + 1].mean()
+    return out
 
 
 def ewma(prices: np.ndarray, alpha: float = 0.3) -> np.ndarray:
@@ -64,198 +115,227 @@ def ewma(prices: np.ndarray, alpha: float = 0.3) -> np.ndarray:
     return out
 
 
-def z_score(value: float, mean: float, std: float) -> float:
-    if std == 0:
-        return 0.0
-    return (value - mean) / std
-
-
-def linear_regression_forecast(
-    timestamps: np.ndarray, prices: np.ndarray, hours_ahead: float
-) -> tuple[float, float, float]:
-    """Returns (predicted_value, slope_per_hour, residual_std)."""
-    n = len(prices)
-    if n < 2:
-        return float(prices[-1]) if n else 0.0, 0.0, 0.0
-
-    t0 = timestamps[0]
-    x = np.array([(t - t0) / 3600.0 for t in timestamps])  # hours since first obs
-    slope, intercept = np.polyfit(x, prices, 1)
-
-    predicted_y = slope * x + intercept
-    residuals = prices - predicted_y
-    residual_std = float(np.std(residuals)) if n > 2 else float(np.std(prices))
-
-    x_future = x[-1] + hours_ahead
-    forecast = slope * x_future + intercept
-    return float(forecast), float(slope), residual_std
-
-
-def _prob_price_increase(slope: float, residual_std: float, current_price: float) -> float:
-    """Probability that price increases, modeled via a normal distribution
-    centered on the regression trend (z of 0 threshold)."""
-    if residual_std <= 0:
-        return 1.0 if slope > 0 else (0.0 if slope < 0 else 0.5)
-    z = slope / (residual_std / max(1.0, math.sqrt(2)))
-    return float(_norm_cdf(z))
-
-
 def _norm_cdf(x: float) -> float:
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
 
-def compute_seasonality(observations: list[PriceObservation]) -> dict:
+@dataclass
+class Forecast:
+    value_24h: float
+    value_48h: float
+    se_24h: float
+    se_48h: float
+    t: float
+    slope_per_day: float
+
+
+def trend_forecast(hours: np.ndarray, prices: np.ndarray) -> Forecast | None:
+    """OLS fit price ~ a + b*hours with prediction standard errors."""
+    n = len(prices)
+    if n < MIN_FORECAST_OBS or hours[-1] - hours[0] < MIN_FORECAST_SPAN_HOURS:
+        return None
+    x_bar = hours.mean()
+    sxx = float(((hours - x_bar) ** 2).sum())
+    if sxx == 0:
+        return None
+    slope, intercept = np.polyfit(hours, prices, 1)
+    residuals = prices - (slope * hours + intercept)
+    s = math.sqrt(float((residuals ** 2).sum()) / (n - 2))
+
+    def at(h_ahead: float) -> tuple[float, float]:
+        x0 = hours[-1] + h_ahead
+        yhat = float(slope * x0 + intercept)
+        se = s * math.sqrt(1 + 1 / n + (x0 - x_bar) ** 2 / sxx)
+        return max(yhat, 1.0), se
+
+    v24, se24 = at(24)
+    v48, se48 = at(48)
+    return Forecast(v24, v48, se24, se48, t_critical(n - 2), float(slope) * 24)
+
+
+def _prob_above(current: float, forecast: float, se: float) -> float:
+    if se <= 0:
+        return 1.0 if forecast > current else (0.0 if forecast < current else 0.5)
+    return 1 - _norm_cdf((current - forecast) / se)
+
+
+def compute_seasonality(observations: Sequence[Observation]) -> dict:
+    empty = {
+        "cheapest_day_of_week": None,
+        "most_expensive_day_of_week": None,
+        "cheapest_hour_of_day": None,
+        "most_expensive_hour_of_day": None,
+    }
+    if len(observations) < SEASONALITY_MIN_OBS:
+        return empty
+    span = observations[-1].timestamp - observations[0].timestamp
+    if span < timedelta(days=SEASONALITY_MIN_DAYS):
+        return empty
     by_day: dict[str, list[float]] = defaultdict(list)
     by_hour: dict[int, list[float]] = defaultdict(list)
     for obs in observations:
         by_day[DAY_NAMES[obs.timestamp.weekday()]].append(obs.price)
         by_hour[obs.timestamp.hour].append(obs.price)
-
-    cheapest_day = min(by_day, key=lambda d: np.mean(by_day[d])) if by_day else None
-    priciest_day = max(by_day, key=lambda d: np.mean(by_day[d])) if by_day else None
-    cheapest_hour = min(by_hour, key=lambda h: np.mean(by_hour[h])) if by_hour else None
-    priciest_hour = max(by_hour, key=lambda h: np.mean(by_hour[h])) if by_hour else None
-
     return {
-        "cheapest_day_of_week": cheapest_day,
-        "most_expensive_day_of_week": priciest_day,
-        "cheapest_hour_of_day": cheapest_hour,
-        "most_expensive_hour_of_day": priciest_hour,
+        "cheapest_day_of_week": min(by_day, key=lambda d: np.mean(by_day[d])),
+        "most_expensive_day_of_week": max(by_day, key=lambda d: np.mean(by_day[d])),
+        "cheapest_hour_of_day": min(by_hour, key=lambda h: np.mean(by_hour[h])),
+        "most_expensive_hour_of_day": max(by_hour, key=lambda h: np.mean(by_hour[h])),
     }
 
 
-def build_explanation(
-    current_price: float,
-    historical_average: float,
-    pct_below_avg: float,
+def _recommend(
+    *,
+    has_forecast: bool,
+    days_out: int,
     percentile: float,
-    recommendation: Recommendation,
-    prob_increase_48h: float,
-    expected_increase: float,
-    confidence_score: float,
+    z: float,
+    prob_up_48h: float,
+) -> tuple[Recommendation, str]:
+    """Returns (recommendation, reason_code)."""
+    if days_out <= FINAL_WEEK_DAYS:
+        return Recommendation.BUY_NOW, "final_week"
+    if not has_forecast:
+        return Recommendation.MONITOR, "collecting"
+    cheap = percentile <= BUY_PERCENTILE or z <= BUY_Z
+    if cheap and prob_up_48h >= BUY_PROB_UP:
+        return Recommendation.BUY_NOW, "cheap_and_rising"
+    if prob_up_48h <= WAIT_PROB_UP and days_out > WAIT_MIN_DAYS and not cheap:
+        return Recommendation.WAIT, "falling"
+    if cheap:
+        return Recommendation.MONITOR, "cheap_but_falling"
+    return Recommendation.MONITOR, "no_signal"
+
+
+def build_explanation(
+    reason: str,
+    *,
+    current: float,
+    average: float,
+    percentile: float,
+    n: int,
+    days_out: int,
+    forecast_48h: float,
+    prob_up_48h: float,
+    ci: tuple[float, float],
 ) -> str:
-    direction = "below" if pct_below_avg > 0 else "above"
-    pct_abs = abs(pct_below_avg)
-
-    if recommendation == Recommendation.BUY_NOW:
-        return (
-            f"Current price is {pct_abs:.0f}% {direction} historical average and falls within the "
-            f"bottom {percentile:.1f}% of observed prices. Model predicts a {prob_increase_48h * 100:.0f}% "
-            f"probability that prices will increase by more than ${abs(expected_increase):.0f} within the "
-            f"next 48 hours. Confidence: {confidence_score:.0f}%."
-        )
-    if recommendation == Recommendation.WAIT:
-        return (
-            f"Current price is {pct_abs:.0f}% {direction} historical average. Model confidence is "
-            f"{confidence_score:.0f}% and the trend points toward lower prices ahead, so waiting is "
-            f"likely to yield a better fare."
-        )
-    return (
-        f"Current price is {pct_abs:.0f}% {direction} historical average with no strong signal in either "
-        f"direction (confidence {confidence_score:.0f}%). Continue monitoring for a clearer entry point."
+    diff_pct = (current - average) / average * 100 if average else 0.0
+    if abs(diff_pct) < 1:
+        rel = f"in line with its average of ${average:,.0f}"
+    else:
+        rel = f"{abs(diff_pct):.0f}% {'below' if diff_pct < 0 else 'above'} its average of ${average:,.0f}"
+    seen = f"${current:,.0f} is {rel} across {n} observations"
+    cheaper_than = f"cheaper than {100 - percentile:.0f}% of prices seen"
+    fc = (
+        f"The trend model projects ${forecast_48h:,.0f} in 48 hours "
+        f"(95% range ${ci[0]:,.0f}–${ci[1]:,.0f}), a {prob_up_48h * 100:.0f}% chance the fare is higher then"
     )
+    if reason == "final_week":
+        return (
+            f"Departure is {days_out} day{'s' if days_out != 1 else ''} away. Fares rarely fall in the final week, "
+            f"so book now. Current fare {seen}."
+        )
+    if reason == "collecting":
+        return (
+            f"Collecting data: {n} of {MIN_FORECAST_OBS} observations needed (spanning {MIN_FORECAST_SPAN_HOURS}+ hours) "
+            f"before forecasting. Current fare: ${current:,.0f}."
+        )
+    if reason == "cheap_and_rising":
+        return f"Good price: {seen}, {cheaper_than}. {fc}. Buying now locks in the lower fare."
+    if reason == "falling":
+        return f"Prices are trending down: {seen}. {fc}. With {days_out} days to departure, waiting is reasonable."
+    if reason == "cheap_but_falling":
+        return f"Already a low fare ({cheaper_than}), but the trend still points down. {fc}. Watch for the next reading."
+    return f"No strong signal: {seen}. {fc}. Keep monitoring."
 
 
-def run_analytics(observations: list[PriceObservation]) -> AnalyticsResult | None:
+def run_analytics(
+    observations: Sequence[Observation], departure_date: date, now: datetime
+) -> AnalyticsResult | None:
     if not observations:
         return None
 
     observations = sorted(observations, key=lambda o: o.timestamp)
     prices = np.array([o.price for o in observations], dtype=float)
-    timestamps = np.array([o.timestamp.timestamp() for o in observations], dtype=float)
-
-    current_price = float(prices[-1])
-    historical_average = float(np.mean(prices))
-    historical_low = float(np.min(prices))
-    historical_high = float(np.max(prices))
-    std = float(np.std(prices))
-
-    sma_series = simple_moving_average(prices, window=5)
-    ewma_series = ewma(prices, alpha=0.3)
-    sma_latest = float(sma_series[-1])
-    ewma_latest = float(ewma_series[-1])
-
-    z = z_score(current_price, historical_average, std)
-    percentile = float((prices <= current_price).mean() * 100)
-
-    forecast_24h, slope, residual_std = linear_regression_forecast(timestamps, prices, hours_ahead=24)
-    forecast_48h, _, _ = linear_regression_forecast(timestamps, prices, hours_ahead=48)
-
-    prob_increase_24h = _prob_price_increase(slope, residual_std, current_price)
-    prob_increase_48h = _prob_price_increase(slope * 1.2, residual_std, current_price)
-
-    expected_increase = max(0.0, forecast_48h - current_price)
-    expected_decrease = max(0.0, current_price - forecast_48h)
-
-    margin = 1.96 * (residual_std if residual_std > 0 else std)
-    ci_low = forecast_48h - margin
-    ci_high = forecast_48h + margin
-
     n = len(prices)
-    sample_size_factor = min(1.0, n / 30.0)
-    fit_quality = 1.0 - min(1.0, (residual_std / historical_average) if historical_average else 0)
-    confidence_score = float(max(0.0, min(100.0, (0.6 * sample_size_factor + 0.4 * fit_quality) * 100)))
 
-    volatility_score = float((std / historical_average) * 100) if historical_average else 0.0
+    current = float(prices[-1])
+    average = float(prices.mean())
+    low, high = float(prices.min()), float(prices.max())
+    std = float(prices.std(ddof=1)) if n > 1 else 0.0
+    z = (current - average) / std if std > 0 else 0.0
+    percentile = float((prices < current).mean() * 100)
+    days_out = (departure_date - now.date()).days
 
-    recommendation = _recommend(z, confidence_score, forecast_48h, current_price)
+    sma_series = simple_moving_average(prices, 5)
+    ewma_series = ewma(prices, 0.3)
 
-    pct_below_avg = ((historical_average - current_price) / historical_average * 100) if historical_average else 0.0
+    window_start = observations[-1].timestamp - timedelta(days=REGRESSION_WINDOW_DAYS)
+    recent = [o for o in observations if o.timestamp >= window_start]
+    if len(recent) < MIN_FORECAST_OBS:
+        recent = list(observations)
+    t0 = recent[0].timestamp
+    hours = np.array([(o.timestamp - t0).total_seconds() / 3600 for o in recent], dtype=float)
+    fc = trend_forecast(hours, np.array([o.price for o in recent], dtype=float))
 
+    if fc:
+        f24, f48 = fc.value_24h, fc.value_48h
+        half = fc.t * fc.se_48h
+        ci = (max(0.0, f48 - half), f48 + half)
+        p24 = _prob_above(current, f24, fc.se_24h)
+        p48 = _prob_above(current, f48, fc.se_48h)
+        sample_factor = min(1.0, n / FULL_CONFIDENCE_OBS)
+        precision = max(0.0, 1 - half / current) if current else 0.0
+        confidence = round(100 * sample_factor * precision, 1)
+    else:
+        f24 = f48 = current
+        ci = (current, current)
+        p24 = p48 = 0.5
+        confidence = 0.0
+
+    rec, reason = _recommend(has_forecast=fc is not None, days_out=days_out, percentile=percentile, z=z, prob_up_48h=p48)
     explanation = build_explanation(
-        current_price=current_price,
-        historical_average=historical_average,
-        pct_below_avg=pct_below_avg,
+        reason,
+        current=current,
+        average=average,
         percentile=percentile,
-        recommendation=recommendation,
-        prob_increase_48h=prob_increase_48h,
-        expected_increase=expected_increase,
-        confidence_score=confidence_score,
+        n=n,
+        days_out=days_out,
+        forecast_48h=f48,
+        prob_up_48h=p48,
+        ci=ci,
     )
 
-    seasonality = compute_seasonality(observations)
-
     series = [
-        {
-            "timestamp": obs.timestamp.isoformat(),
-            "price": obs.price,
-            "sma": float(sma_series[i]),
-            "ewma": float(ewma_series[i]),
-        }
-        for i, obs in enumerate(observations)
+        {"timestamp": o.timestamp.isoformat(), "price": o.price, "sma": float(sma_series[i]), "ewma": float(ewma_series[i])}
+        for i, o in enumerate(observations)
     ]
 
     return AnalyticsResult(
-        current_price=current_price,
-        historical_average=historical_average,
-        historical_low=historical_low,
-        historical_high=historical_high,
+        current_price=current,
+        historical_average=average,
+        historical_low=low,
+        historical_high=high,
         std_dev=std,
         z_score=z,
-        sma=sma_latest,
-        ewma=ewma_latest,
-        predicted_price_24h=forecast_24h,
-        predicted_price_48h=forecast_48h,
-        prob_increase_24h=prob_increase_24h,
-        prob_increase_48h=prob_increase_48h,
-        expected_increase=expected_increase,
-        expected_decrease=expected_decrease,
-        confidence_interval_low=ci_low,
-        confidence_interval_high=ci_high,
-        confidence_score=confidence_score,
-        recommendation=recommendation,
+        percentile=percentile,
+        sma=float(sma_series[-1]),
+        ewma=float(ewma_series[-1]),
+        predicted_price_24h=f24,
+        predicted_price_48h=f48,
+        prob_increase_24h=p24,
+        prob_increase_48h=p48,
+        expected_increase=max(0.0, f48 - current),
+        expected_decrease=max(0.0, current - f48),
+        confidence_interval_low=ci[0],
+        confidence_interval_high=ci[1],
+        confidence_score=confidence,
+        recommendation=rec,
         explanation=explanation,
-        volatility_score=volatility_score,
+        observation_count=n,
+        days_to_departure=days_out,
+        has_forecast=fc is not None,
+        volatility_score=(std / average * 100) if average else 0.0,
         series=series,
-        **seasonality,
+        **compute_seasonality(observations),
     )
-
-
-def _recommend(
-    z: float, confidence_score: float, predicted_price_48h: float, current_price: float
-) -> Recommendation:
-    if z < -2 and confidence_score > 80 and predicted_price_48h > current_price:
-        return Recommendation.BUY_NOW
-    if confidence_score < 60 or predicted_price_48h < current_price:
-        return Recommendation.WAIT
-    return Recommendation.MONITOR
